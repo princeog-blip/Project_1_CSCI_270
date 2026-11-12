@@ -1,0 +1,142 @@
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+import matplotlib.dates as mdates
+import numpy as np
+import pandas as pd
+
+
+COLUMNS = [
+    "No",
+    "year",
+    "month",
+    "day",
+    "hour",
+    "PM2.5",
+    "PM10",
+    "SO2",
+    "NO2",
+    "CO",
+    "O3",
+    "TEMP",
+    "PRES",
+    "DEWP",
+    "RAIN",
+    "wd",
+    "WSPM",
+    "station",
+]
+
+DATA_FILE = (
+    Path(__file__).resolve().parent
+    / "beijing+multi+site+air+quality+data"
+    / "PRSA2017_Data_20130301-20170228"
+    / "PRSA_Data_Dingling_20130301-20170228.csv"
+)
+OUTPUT_DIRECTORY = Path(__file__).resolve().parent
+OUTPUT_FILE = OUTPUT_DIRECTORY / "part4TimeSeries_CO_daily.png"
+FILLED_DATA_FILE = OUTPUT_DIRECTORY / "part4TimeSeries_CO_filled.csv"
+DAILY_DATA_FILE = OUTPUT_DIRECTORY / "part4TimeSeries_CO_daily.csv"
+
+
+def load_table() -> pd.DataFrame:
+    """Load the full CSV table with a datetime index from its date columns."""
+    table = pd.read_csv(DATA_FILE)
+    if list(table.columns) != COLUMNS:
+        raise ValueError(
+            f"Unexpected CSV header in {DATA_FILE}: {list(table.columns)!r}"
+        )
+
+    table.index = pd.to_datetime(table[["year", "month", "day", "hour"]])
+    table.index.name = "datetime"
+    return table
+
+
+def fill_co_seasonally(table: pd.DataFrame) -> pd.DataFrame:
+    """Fill missing CO with its season-and-hour median, preserving observed CO."""
+    result = table.copy()
+    season_by_month = {
+        12: "Winter",
+        1: "Winter",
+        2: "Winter",
+        3: "Spring",
+        4: "Spring",
+        5: "Spring",
+        6: "Summer",
+        7: "Summer",
+        8: "Summer",
+        9: "Autumn",
+        10: "Autumn",
+        11: "Autumn",
+    }
+    seasons = result.index.month.map(season_by_month)
+    seasonal_hour_medians = result["CO"].groupby(
+        [seasons, result.index.hour]
+    ).transform("median")
+
+    result["CO_was_imputed"] = result["CO"].isna()
+    result["CO_filled"] = result["CO"].fillna(seasonal_hour_medians)
+    if result["CO_filled"].isna().any():
+        raise ValueError("Seasonal matching could not fill every missing CO value.")
+    return result
+
+
+def calculate_daily_averages(table: pd.DataFrame) -> pd.DataFrame:
+    """Resample seasonally filled hourly CO to daily means and fit a linear trend."""
+    daily = table["CO_filled"].resample("D").mean().to_frame(
+        name="CO_daily_average"
+    )
+    elapsed_days = (daily.index - daily.index[0]).days.to_numpy()
+    slope, intercept = np.polyfit(elapsed_days, daily["CO_daily_average"], 1)
+    daily["CO_trend"] = slope * elapsed_days + intercept
+    return daily
+
+
+def plot_daily_co(daily: pd.DataFrame, imputed_count: int) -> None:
+    """Visualize the daily mean CO series and its fitted linear trend."""
+    figure, axis = plt.subplots(figsize=(15, 6))
+    axis.scatter(
+        daily.index,
+        daily["CO_daily_average"],
+        color="tab:blue",
+        s=8,
+        label="Daily average CO",
+    )
+    axis.plot(
+        daily.index,
+        daily["CO_trend"],
+        color="tab:red",
+        linewidth=2,
+        label="Linear trend",
+    )
+    axis.set_title(
+        f"Dingling CO daily averages and trend "
+        f"({imputed_count:,} hourly values seasonally imputed)"
+    )
+    axis.set_ylabel("CO concentration")
+    axis.set_xlabel("Date")
+    axis.xaxis.set_major_locator(mdates.YearLocator())
+    axis.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    axis.grid(True, alpha=0.25)
+    axis.legend()
+    figure.tight_layout()
+    figure.savefig(OUTPUT_FILE, dpi=180)
+    plt.show()
+
+
+def main() -> None:
+    table = fill_co_seasonally(load_table())
+    table[["CO", "CO_filled", "CO_was_imputed"]].to_csv(FILLED_DATA_FILE)
+    daily = calculate_daily_averages(table)
+    daily.to_csv(DAILY_DATA_FILE, index_label="datetime")
+    print(f"Loaded {len(table):,} hourly records.")
+    print(f"Seasonally imputed CO values: {int(table['CO_was_imputed'].sum()):,}")
+    print(f"Saved filled CO data to: {FILLED_DATA_FILE}")
+    print(f"Calculated {len(daily):,} daily averages.")
+    plot_daily_co(daily, int(table["CO_was_imputed"].sum()))
+    print(f"Saved daily averages and trend to: {DAILY_DATA_FILE}")
+    print(f"Saved visualization to: {OUTPUT_FILE}")
+
+
+if __name__ == "__main__":
+    main()
