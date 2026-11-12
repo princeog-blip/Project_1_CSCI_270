@@ -1,8 +1,12 @@
 from pathlib import Path
 
+# Matplotlib is used to draw the final CO trend chart.
 import matplotlib.pyplot as plt
+# This helps format the date labels on the x-axis (such as years).
 import matplotlib.dates as mdates
+# NumPy is used for the linear trend calculation.
 import numpy as np
+# Pandas is used for reading and processing the time-series data.
 import pandas as pd
 
 
@@ -27,6 +31,7 @@ COLUMNS = [
     "station",
 ]
 
+# This is the path to the raw hourly air-quality CSV file.
 DATA_FILE = (
     Path(__file__).resolve().parent
     / "beijing+multi+site+air+quality+data"
@@ -39,6 +44,7 @@ FILLED_DATA_FILE = OUTPUT_DIRECTORY / "part4TimeSeries_CO_filled.csv"
 DAILY_DATA_FILE = OUTPUT_DIRECTORY / "part4TimeSeries_CO_daily.csv"
 
 
+# Load the raw CSV and convert the date fields into a proper datetime index.
 def load_table() -> pd.DataFrame:
     """Load the full CSV table with a datetime index from its date columns."""
     table = pd.read_csv(DATA_FILE)
@@ -47,14 +53,18 @@ def load_table() -> pd.DataFrame:
             f"Unexpected CSV header in {DATA_FILE}: {list(table.columns)!r}"
         )
 
+    # Combine year, month, day, and hour into a single datetime value.
     table.index = pd.to_datetime(table[["year", "month", "day", "hour"]])
     table.index.name = "datetime"
     return table
 
 
+# Fill missing CO values using the median CO for the same season and hour.
 def fill_co_seasonally(table: pd.DataFrame) -> pd.DataFrame:
     """Fill missing CO with its season-and-hour median, preserving observed CO."""
     result = table.copy()
+
+    # Map each month to a season so CO can be compared within seasonal groups.
     season_by_month = {
         12: "Winter",
         1: "Winter",
@@ -69,24 +79,35 @@ def fill_co_seasonally(table: pd.DataFrame) -> pd.DataFrame:
         10: "Autumn",
         11: "Autumn",
     }
+
     seasons = result.index.month.map(season_by_month)
+    # Compute the median CO value for each season/hour combination.
+    # transform("median") returns a value for each row, matching the original index.
     seasonal_hour_medians = result["CO"].groupby(
         [seasons, result.index.hour]
     ).transform("median")
 
+    # Track which original CO values were missing before filling.
     result["CO_was_imputed"] = result["CO"].isna()
+    # Replace missing CO values with the median for the matching season and hour.
     result["CO_filled"] = result["CO"].fillna(seasonal_hour_medians)
+
+    # Safety check: if any missing value remains after the fill, stop immediately.
     if result["CO_filled"].isna().any():
         raise ValueError("Seasonal matching could not fill every missing CO value.")
     return result
 
 
+# Compute daily average CO and fit a simple linear trend over time.
 def calculate_daily_averages(table: pd.DataFrame) -> pd.DataFrame:
     """Resample seasonally filled hourly CO to daily means and fit a linear trend."""
     daily = table["CO_filled"].resample("D").mean().to_frame(
         name="CO_daily_average"
     )
+
+    # Calculate how many days have elapsed since the first date in the series.
     elapsed_days = (daily.index - daily.index[0]).days.to_numpy()
+    # Fit a straight line: CO = slope * days + intercept
     slope, intercept = np.polyfit(elapsed_days, daily["CO_daily_average"], 1)
     daily["CO_trend"] = slope * elapsed_days + intercept
     return daily
@@ -95,6 +116,8 @@ def calculate_daily_averages(table: pd.DataFrame) -> pd.DataFrame:
 def plot_daily_co(daily: pd.DataFrame, imputed_count: int) -> None:
     """Visualize the daily mean CO series and its fitted linear trend."""
     figure, axis = plt.subplots(figsize=(15, 6))
+
+    # Scatter plot of daily CO averages.
     axis.scatter(
         daily.index,
         daily["CO_daily_average"],
@@ -102,6 +125,8 @@ def plot_daily_co(daily: pd.DataFrame, imputed_count: int) -> None:
         s=8,
         label="Daily average CO",
     )
+
+    # Line plot of the fitted linear trend.
     axis.plot(
         daily.index,
         daily["CO_trend"],
@@ -109,31 +134,43 @@ def plot_daily_co(daily: pd.DataFrame, imputed_count: int) -> None:
         linewidth=2,
         label="Linear trend",
     )
+
     axis.set_title(
         f"Dingling CO daily averages and trend "
         f"({imputed_count:,} hourly values seasonally imputed)"
     )
     axis.set_ylabel("CO concentration")
     axis.set_xlabel("Date")
+
     axis.xaxis.set_major_locator(mdates.YearLocator())
     axis.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+
     axis.grid(True, alpha=0.25)
     axis.legend()
     figure.tight_layout()
+
     figure.savefig(OUTPUT_FILE, dpi=180)
     plt.show()
 
 
+# Main workflow: load, clean, aggregate, save, and plot the data.
 def main() -> None:
+    # Fill missing CO values in the full hourly dataset.
     table = fill_co_seasonally(load_table())
     table[["CO", "CO_filled", "CO_was_imputed"]].to_csv(FILLED_DATA_FILE)
+
+    # Compute daily CO averages and the overall linear trend.
     daily = calculate_daily_averages(table)
     daily.to_csv(DAILY_DATA_FILE, index_label="datetime")
+
+    # Print summary information for the user.
     print(f"Loaded {len(table):,} hourly records.")
     print(f"Seasonally imputed CO values: {int(table['CO_was_imputed'].sum()):,}")
     print(f"Saved filled CO data to: {FILLED_DATA_FILE}")
     print(f"Calculated {len(daily):,} daily averages.")
+
     plot_daily_co(daily, int(table["CO_was_imputed"].sum()))
+
     print(f"Saved daily averages and trend to: {DAILY_DATA_FILE}")
     print(f"Saved visualization to: {OUTPUT_FILE}")
 
