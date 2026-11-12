@@ -9,6 +9,11 @@ import numpy as np
 # Pandas is used for reading and processing the time-series data.
 import pandas as pd
 
+# Part 4 Brief Into: The task for this part is to take data from Dingling monitoring station, 
+# ,combine the time features into one so that the data can be chronologically organized,
+# ,chose one pollutant to focus one, chose a method to fill in that pollutants missing 
+# readings on the chart, calculate the daily averages, and draw a line to fit its trend over time.
+
 
 COLUMNS = [
     "No",
